@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>Water Sort AI v6</title>
+<title>Water Sort AI v6.1</title>
 <style>
 :root{--bg:#101318;--card:#1b2028;--card2:#242b36;--text:#f2f4f8;--muted:#b8c0cc;--accent:#8bd3ff;--line:#3a4352}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Arial,Helvetica,sans-serif}
@@ -23,7 +23,7 @@ textarea{width:100%;min-height:145px;font-family:monospace}.next{background:#111
 </style>
 </head>
 <body>
-<header><h1>Water Sort AI v6</h1><div class="small">Single-file Samsung helper. Hidden colors (?) are occupied. AI avoids loops and looks ahead.</div></header>
+<header><h1>Water Sort AI v6.1</h1><div class="small">Single-file Samsung helper. Hidden colors (?) are occupied. AI blocks immediate reversals and avoids prior board states.</div></header>
 <main>
 <div class="tabs"><button class="primary" onclick="showTab('solve')">Solve</button><button onclick="showTab('edit')">Edit Board</button><button onclick="showTab('data')">Import/Save</button></div>
 <section id="solveTab"><div class="panel"><div id="status" class="small"></div><div id="nextBox" class="next">Tap Analyze for a recommendation.</div><div class="row"><button class="primary" onclick="analyze()">Analyze</button><button class="good" onclick="doBest()">Do Best Move</button><button onclick="undo()">Undo</button><button onclick="showLegal()">Legal Moves</button><button class="warn" onclick="resetDemo()">Reset Demo</button></div></div><div id="board" class="board"></div><div class="panel"><b>AI Reasoning</b><div id="advisor" class="pre">No analysis yet.</div></div><div class="panel"><b>Move Log</b><div id="log" class="pre"></div></div></section>
@@ -41,15 +41,37 @@ function clone(b){return b.map(t=>[...t])}function key(b){return JSON.stringify(
 function topBlock(t){if(!t.length)return 0;let c=t[0],n=0;for(const x of t){if(x===c)n++;else break}return n}
 function canPour(b,s,d){if(s===d)return false;let src=b[s],dst=b[d];if(!src.length||dst.length>=CAP)return false;let c=src[0];if(c===UNKNOWN)return false;if(!dst.length)return true;if(dst[0]===UNKNOWN)return false;return dst[0]===c}
 function apply(b,s,d){if(!canPour(b,s,d))return null;let nb=clone(b),src=nb[s],dst=nb[d],c=src[0];let amt=Math.min(topBlock(src),CAP-dst.length);let moved=src.splice(0,amt);nb[d]=moved.concat(dst);return{board:nb,move:{s,d,c,amt}}}
-function legal(b,avoid=true){let out=[];for(let s=0;s<14;s++)for(let d=0;d<14;d++){if(!canPour(b,s,d))continue;if(avoid&&lastMove&&lastMove.s===d&&lastMove.d===s)continue;let r=apply(b,s,d);if(avoid&&seen.has(key(r.board)))continue;out.push(r.move)}return out}
+function legal(b,avoid=true){
+ let out=[];
+ for(let s=0;s<14;s++)for(let d=0;d<14;d++){
+  if(!canPour(b,s,d))continue;
+  if(avoid&&lastMove&&lastMove.s===d&&lastMove.d===s)continue;
+  let r=apply(b,s,d),k=key(r.board);
+  if(avoid&&seen.has(k))continue;
+  out.push(r.move)
+ }
+ return out
+}
 function boardScore(b){let score=0;for(const t of b){if(!t.length){score+=60;continue}let known=t.filter(x=>x!==UNKNOWN);if(t.length===4&&known.length===4&&new Set(t).size===1)score+=700;let run=topBlock(t);if(run===2)score+=30;if(run===3)score+=100;if(run===4&&new Set(t).size===1)score+=300;if(new Set(known).size>1)score-=known.length*14;if(t[0]===UNKNOWN)score-=35}return score}
 function evalMove(b,m,localSeen){let r=apply(b,m.s,m.d),score=boardScore(r.board)-boardScore(b),reasons=[],src=b[m.s],dst=b[m.d],as=r.board[m.s],ad=r.board[m.d];if(dst.length===0){score+=8;reasons.push("uses empty working tube")}else{score+=35;reasons.push("stacks onto matching color")}if(m.amt>1){score+=m.amt*15;reasons.push("moves a group")}if(as.length===0){score+=90;reasons.push("empties source tube")}else if(as[0]!==src[0]){score+=45;reasons.push("reveals "+as[0]+" on tube "+(m.s+1))}let run=topBlock(ad);if(run===4&&new Set(ad).size===1){score+=250;reasons.push("completes "+m.c)}else if(run===3){score+=90;reasons.push("builds 3-stack")}else if(run===2){score+=35;reasons.push("builds pair")}if(localSeen.has(key(r.board))){score-=10000;reasons.push("would repeat board")}if(dst.length===0&&m.amt===1){score-=18;reasons.push("uses empty for single piece")}return{m,score,reasons,after:r.board}}
 function lookahead(b,depth,prev,localSeen){if(depth<=0)return{score:boardScore(b),line:[]};let saved=lastMove;lastMove=prev;let moves=legal(b,true);lastMove=saved;if(!moves.length)return{score:boardScore(b),line:[]};let best=null;for(const m of moves){let r=apply(b,m.s,m.d),ns=new Set(localSeen);ns.add(key(r.board));let e=evalMove(b,m,localSeen),f=lookahead(r.board,depth-1,m,ns),total=e.score+f.score*0.12;if(!best||total>best.score)best={score:total,line:[m,...f.line],reasons:e.reasons}}return best}
-function ranked(){let moves=legal(board,true);if(!moves.length)moves=legal(board,false);return moves.map(m=>{let r=apply(board,m.s,m.d),ns=new Set(seen);ns.add(key(r.board));let e=evalMove(board,m,seen),f=lookahead(r.board,5,m,ns);return{m,score:e.score+f.score*0.12,reasons:e.reasons,line:[m,...f.line]}}).sort((a,b)=>b.score-a.score)}
+function ranked(){
+ let moves=legal(board,true);
+ if(!moves.length)return [];
+ return moves.map(m=>{
+  let r=apply(board,m.s,m.d),ns=new Set(seen);ns.add(key(r.board));
+  let e=evalMove(board,m,seen),f=lookahead(r.board,5,m,ns);
+  return{m,score:e.score+f.score*0.12,reasons:e.reasons,line:[m,...f.line]}
+ }).sort((a,b)=>b.score-a.score)
+}
 function stars(s){if(s>=150)return"★★★★★";if(s>=90)return"★★★★☆";if(s>=45)return"★★★☆☆";if(s>=10)return"★★☆☆☆";return"★☆☆☆☆"}
 function analyze(){let r=ranked();if(!r.length){setAdv("No legal moves.");setNext("No legal moves.");return r}let out="Recommended moves, loop-aware with 5-move lookahead:\n\n";r.slice(0,6).forEach((x,i)=>{out+=`${i+1}. ${stars(x.score)} ${x.m.s+1} → ${x.m.d+1} (${x.m.amt} ${x.m.c}) score ${Math.round(x.score)}\nWhy: ${x.reasons.join("; ")}\nPossible line: ${x.line.slice(0,6).map(m=>`${m.s+1}→${m.d+1}`).join(", ")}\n\n`});setAdv(out);let b=r[0].m;setNext(`Best: ${b.s+1} → ${b.d+1} (${b.amt} ${b.c})`);return r}
 function setNext(s){document.getElementById("nextBox").textContent=s}function setAdv(s){document.getElementById("advisor").textContent=s}
-function doBest(){let r=analyze();if(r.length)move(r[0].m.s,r[0].m.d)}
+function doBest(){
+ let r=analyze();
+ if(!r.length){log("No safe non-loop recommendation. Use Legal Moves or Undo.");return}
+ move(r[0].m.s,r[0].m.d)
+}
 function move(s,d){let r=apply(board,s,d);if(!r){log(`Illegal move ${s+1} → ${d+1}`);return false}history.push({board:clone(board),lastMove,seen:new Set(seen)});board=r.board;lastMove=r.move;seen.add(key(board));log(`Move ${s+1} → ${d+1} (${r.move.amt} ${r.move.c})`);selectedTube=null;render();return true}
 function undo(){if(!history.length){log("Nothing to undo.");return}let h=history.pop();board=h.board;lastMove=h.lastMove;seen=h.seen;selectedTube=null;selectedSlot=null;render();log("Undo")}
 function render(){let el=document.getElementById("board");el.innerHTML="";board.forEach((tube,i)=>{let div=document.createElement("div");div.className="tube"+(selectedTube===i?" selected":"");div.onclick=()=>tapTube(i);let lab=document.createElement("div");lab.className="label";lab.textContent=i+1;div.appendChild(lab);let slots=Array(CAP-tube.length).fill("Empty").concat(tube);slots.forEach((c,si)=>{let slot=document.createElement("div");slot.className="slot"+(c==="Empty"?" empty":"");if(selectedSlot&&selectedSlot.i===i&&selectedSlot.si===si)slot.className+=" editing";slot.style.background=COLOR_HEX[c]||"#ddd";slot.textContent=c;slot.onclick=(ev)=>{ev.stopPropagation();tapSlot(i,si)};div.appendChild(slot)});el.appendChild(div)});document.getElementById("status").textContent=editMode?"Edit mode: tap a slot, then a color.":(selectedTube===null?"Play mode: tap source tube.":`Selected tube ${selectedTube+1}. Tap destination.`)}
